@@ -1,0 +1,10 @@
+{
+  "id": "com.keegandonley.jira",
+  "name": "Jira Extension",
+  "fileName": "keegandonley-jira",
+  "author": "Keegan Donley",
+  "author-email": "kd@keegandonley.com",
+  "description": "App for integrating Jira links",
+  "api": "0.0.1",
+  "main": "index.html"
+}
