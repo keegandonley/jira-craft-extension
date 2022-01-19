@@ -1,6 +1,1 @@
-## Building
-
-Simply run `npm install` and than `npm run build` to generate the .craftX file which can be installed.
-You can use `npm run dev` to test and debug in your local environment
-
-To learn more about Craft eXtensions visit the [Craft X developer portal](https://developer.craft.do).
+This is an extension for Craft to integrate with Jira. For now, installation instructions are here: https://github.com/keegandonley/jira-craft-extension/releases/tag/0.0.1
