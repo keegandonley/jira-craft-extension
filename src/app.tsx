@@ -1,17 +1,19 @@
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
-import { CraftBlock } from '@craftdocs/craft-extension-api';
+import { CraftBlock, HasSubblocks } from '@craftdocs/craft-extension-api';
+import BlockBuilder from './builder';
 
 const App: React.FC<{}> = () => {
-  const [key, setKey] = React.useState<string>('');
+  const [apiKey, setApiKey] = React.useState<string>('');
   const [email, setEmail] = React.useState<string>('');
   const [apiUrl, setUrl] = React.useState<string>('');
   const [loading, setLoading] = React.useState<boolean>(false);
+  const [error, setError] = React.useState<string>('');
 
   const retrieveKey = React.useCallback(async () => {
     const result = await craft.storageApi.get('jira-api-key');
     if (result.status === 'success') {
-      setKey(result.data);
+      setApiKey(result.data);
     }
   }, []);
 
@@ -37,7 +39,7 @@ const App: React.FC<{}> = () => {
 
   const handleChangeKey = React.useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      setKey(e.target.value);
+      setApiKey(e.target.value);
       craft.storageApi.put('jira-api-key', e.target.value);
     },
     []
@@ -61,100 +63,57 @@ const App: React.FC<{}> = () => {
 
   const getIssueData = React.useCallback(
     async (url: string) => {
-      const [, ticket] = url.split('browse/');
-      const token = btoa(`${email}:${key}`);
-      const res = await craft.httpProxy.fetch({
-        url: `https://${apiUrl}.atlassian.net/rest/api/2/issue/${ticket}`,
-        method: 'GET',
-        headers: {
-          Authorization: `Basic ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-      const data = await res.data?.body?.json();
-      return data;
+      try {
+        const [, ticket] = url.split('browse/');
+        const token = btoa(`${email}:${apiKey}`);
+        const res = await craft.httpProxy.fetch({
+          url: `https://${apiUrl}.atlassian.net/rest/api/2/issue/${ticket}`,
+          method: 'GET',
+          headers: {
+            Authorization: `Basic ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        const data = await res.data?.body?.json();
+        return data;
+      } catch (ex: any) {
+        setError(ex?.message ?? 'An unknown error ocurred');
+      }
     },
-    [email, key, apiUrl]
+    [email, apiKey, apiUrl]
   );
 
-  const findJiraBlock = React.useCallback(
-    async (block: any, pageId: string) => {
+  const findAndProcessJira = React.useCallback(
+    async (block: CraftBlock, pageId: string): Promise<boolean[]> => {
       if (block.type === 'urlBlock') {
-        const id = block.id;
-        const url = block.originalUrl;
+        const url = block.originalUrl ?? block.url ?? '';
         const ticket = await getIssueData(url);
         if (ticket) {
-          const summary = ticket?.fields?.summary;
-          const key = ticket?.key;
-          const assignee = ticket?.fields?.assignee;
+          const summary = ticket?.fields?.summary ?? '{Summary}';
+          const key = ticket?.key ?? '{Key}';
+          const assignee = ticket?.fields?.assignee?.displayName ?? '{Assignee}';
 
-          const issueTitleBlock = craft.blockFactory.textBlock({
-            content: [
-              {
-                text: key,
-                highlightColor: 'cyan',
-                isBold: true,
-              },
-              {
-                text: ' - ',
-              },
-              {
-                text: summary,
-              },
-            ],
-            indentationLevel: block.indentationLevel,
-            listStyle: block.listStyle,
-          });
+          const builder = new BlockBuilder(pageId, block);
 
-          const assigneeBlock = craft.blockFactory.textBlock({
-            content: [
-              {
-                text: 'Assignee: ',
-                isBold: false,
-              },
-              {
-                text: assignee?.displayName,
-                highlightColor: 'sunsetGradient',
-                isBold: true,
-              },
-            ],
-            indentationLevel: block.indentationLevel + 1,
-            listStyle: block.listStyle,
-          });
+          const blocks = [
+            builder.createIssueTitleBlock(key, summary),
+            builder.createAssigneeBlock(assignee)
+          ];
 
-          const linkBlock = craft.blockFactory.textBlock({
-            content: [
-              {
-                text: 'Open in Jira',
-                link: {
-                  type: 'url',
-                  url,
-                },
-                highlightColor: 'nightSkyGradient',
-              },
-            ],
-            indentationLevel: block.indentationLevel + 1,
-            listStyle: block.listStyle,
-          });
+          await builder.add(blocks);
 
-          await craft.dataApi.addBlocks(
-            [issueTitleBlock, assigneeBlock, linkBlock],
-            {
-              type: 'afterBlockLocation',
-              pageId,
-              blockId: id,
-            }
-          );
-
-          await craft.dataApi.deleteBlocks([id]);
+          await builder.deleteParent();
         }
-      } else if (block.subblocks) {
-        await Promise.all(
-          block.subblocks.map((child: CraftBlock) =>
-            findJiraBlock(child, pageId)
+      } else if ((block as HasSubblocks).subblocks) {
+        const result = await Promise.all(
+          (block as HasSubblocks).subblocks.map((child: CraftBlock) =>
+            findAndProcessJira(child, pageId)
           )
         );
+
+        return result.map(Boolean);
       }
+      return [];
     },
     [getIssueData]
   );
@@ -165,12 +124,14 @@ const App: React.FC<{}> = () => {
       const result = await craft.dataApi.getCurrentPage();
       if (result.status === 'success') {
         const pageBlock = result.data;
-        await findJiraBlock(pageBlock, pageBlock.id);
+        await findAndProcessJira(pageBlock, pageBlock.id);
+      } else {
+        setError('Could not find a document');
       }
     } finally {
       setLoading(false);
     }
-  }, [findJiraBlock]);
+  }, [findAndProcessJira]);
 
   return (
     <div className="flex flex-col w-full px-2">
@@ -200,7 +161,7 @@ const App: React.FC<{}> = () => {
         <input
           className="border rounded-md px-2 py-1 flex-grow"
           type="password"
-          value={key}
+          value={apiKey}
           onChange={handleChangeKey}
         />
       </div>
@@ -210,12 +171,15 @@ const App: React.FC<{}> = () => {
         ) : (
           <button
             onClick={getDocument}
-            disabled={!email || !key}
+            disabled={!email || !apiKey}
             className="shadow p-2 bg-gray-500 rounded-md text-white disabled:bg-gray-300"
           >
             Process Jira Data
           </button>
         )}
+      </div>
+      <div className="mx-auto text-red-500">
+        {error}
       </div>
     </div>
   );
